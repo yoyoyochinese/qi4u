@@ -18,6 +18,9 @@ frontend/out/
 *.swp
 *.swo
 
+.env
+.env.*
+
 # OS
 .DS_Store
 Thumbs.db
