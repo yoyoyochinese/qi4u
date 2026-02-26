@@ -1,10 +1,16 @@
-import { ScenarioResponse, AttemptEvent, PatientResult, AggregateMetrics } from "./types";
+import {
+  ScenarioResponse,
+  AttemptEvent,
+  PatientResult,
+  AggregateMetrics,
+} from "./types";
 
-const API_BASE = "http://localhost:8000";
+// const API_BASE = "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL!;
 
 export async function startSimulation(
   numPatients: number,
-  seed: number
+  seed: number,
 ): Promise<ScenarioResponse> {
   const res = await fetch(`${API_BASE}/api/simulations/start`, {
     method: "POST",
@@ -23,8 +29,8 @@ export async function startSimulation(
 
 export type SSEEvent =
   | { type: "phase"; phase: string; metrics?: AggregateMetrics }
-  | { type: "hop"; mode: "baseline" | "optimized" } & AttemptEvent
-  | { type: "patient_done"; mode: "baseline" | "optimized" } & PatientResult
+  | ({ type: "hop"; mode: "baseline" | "optimized" } & AttemptEvent)
+  | ({ type: "patient_done"; mode: "baseline" | "optimized" } & PatientResult)
   | {
       type: "done";
       baseline_metrics: AggregateMetrics;
@@ -37,7 +43,7 @@ export type SSEEvent =
  */
 export async function runSimulationStream(
   scenarioId: string,
-  onEvent: (event: SSEEvent) => void
+  onEvent: (event: SSEEvent) => void,
 ): Promise<void> {
   const res = await fetch(`${API_BASE}/api/simulations/run`, {
     method: "POST",
