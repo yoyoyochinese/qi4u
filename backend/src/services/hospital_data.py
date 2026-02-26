@@ -21,6 +21,8 @@ _BASE_URL = (
 # Busan metropolitan city stage1/stage2 codes used in data.go.kr
 # STAGE1 = "26" is Busan광역시
 _BUSAN_STAGE1 = "26"
+_BUSAN_HP_PREFIX = "A26"
+_BUSAN_ADDR_KEYWORD = "부산"
 
 # In-memory cache: populated once per process lifetime (or reset explicitly)
 _cached_hospitals: Optional[list[Hospital]] = None
@@ -74,6 +76,36 @@ def _find_coords(name: str) -> tuple[float, float]:
     return (_DEFAULT_LAT, _DEFAULT_LNG)
 
 
+def _is_busan_hospital(*, hpid: str, name: str, addr: str, lat: str, lng: str) -> bool:
+    """Filter out non-Busan rows when upstream region filtering is inconsistent."""
+    if hpid.startswith(_BUSAN_HP_PREFIX):
+        return True
+
+    text = f"{name} {addr}"
+    if _BUSAN_ADDR_KEYWORD in text:
+        return True
+
+    # Keep geo-bounded entries when coordinates are present.
+    if lat and lng:
+        try:
+            lat_f = float(lat)
+            lng_f = float(lng)
+            if 35.0 <= lat_f <= 35.35 and 128.9 <= lng_f <= 129.35:
+                return True
+        except ValueError:
+            pass
+
+    return False
+
+
+def _jitter_center_coords(hospital_id: str) -> tuple[float, float]:
+    """Spread default-center markers so hospitals remain visible on the map."""
+    offset = sum(ord(ch) for ch in hospital_id) % 61
+    lat = _DEFAULT_LAT + ((offset % 11) - 5) * 0.0016
+    lng = _DEFAULT_LNG + ((offset // 11) - 2) * 0.0022
+    return (lat, lng)
+
+
 def _parse_xml_response(xml_text: str) -> list[Hospital]:
     """Parse the XML response from getEmrrmRltmUsefulSckbdInfoInqire."""
     root = ET.fromstring(xml_text)
@@ -93,8 +125,18 @@ def _parse_xml_response(xml_text: str) -> list[Hospital]:
     for item in items:
         hpid = item.findtext("hpid", "")
         name = item.findtext("dutyName", "Unknown")
+        addr = item.findtext("dutyAddr", "")
         wgs84_lat = item.findtext("wgs84Lat", "")
         wgs84_lng = item.findtext("wgs84Lon", "")
+
+        if not _is_busan_hospital(
+            hpid=hpid,
+            name=name,
+            addr=addr,
+            lat=wgs84_lat,
+            lng=wgs84_lng,
+        ):
+            continue
 
         # hvec = ER available beds, hvs01~hvs59 = specialty beds
         # We use hvec (ER beds available) as the primary capacity indicator
@@ -135,6 +177,9 @@ def _parse_xml_response(xml_text: str) -> list[Hospital]:
             continue
         seen_hospital_ids.add(hospital_id)
 
+        if lat == _DEFAULT_LAT and lng == _DEFAULT_LNG:
+            lat, lng = _jitter_center_coords(hospital_id)
+
         hospitals.append(
             Hospital(
                 hospital_id=hospital_id,
@@ -162,6 +207,7 @@ async def fetch_busan_hospitals(service_key: str) -> list[Hospital]:
     params = {
         "serviceKey": service_key,
         "STAGE1": _BUSAN_STAGE1,
+        "STAGE2": "",
         "pageNo": "1",
         "numOfRows": "100",  # fetch all Busan hospitals in one page
     }
