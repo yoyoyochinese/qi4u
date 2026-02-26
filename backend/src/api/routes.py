@@ -50,7 +50,7 @@ async def start_simulation(
         print(f"Fetched {len(hospitals)} hospitals from API.")
     except (ValueError, RuntimeError, httpx.HTTPError):
         # No API key or API call failed — use built-in Busan hospital data
-        pring("Warning: Using fallback hospital data due to missing/invalid API key or fetch error.")
+        print("Warning: Using fallback hospital data due to missing/invalid API key or fetch error.")
         hospitals = generate_fallback_hospitals()
 
     # Auto-generate seed when <= 0
