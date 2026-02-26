@@ -14,7 +14,13 @@ from src.models.simulation import (
     SimulationStartResponse,
     SimulationRunRequest,
 )
-from src.services.hospital_data import fetch_busan_hospitals, generate_fallback_hospitals, reset_cache
+import httpx
+
+from src.services.hospital_data import (
+    fetch_busan_hospitals,
+    generate_fallback_hospitals,
+    reset_cache,
+)
 from src.services.simulation import (
     generate_patients,
     create_scenario,
@@ -41,8 +47,10 @@ async def start_simulation(
     try:
         service_key = get_service_key(x_data_go_kr_key)
         hospitals = await fetch_busan_hospitals(service_key)
-    except (ValueError, Exception):
+        print(f"Fetched {len(hospitals)} hospitals from API.")
+    except (ValueError, RuntimeError, httpx.HTTPError):
         # No API key or API call failed — use built-in Busan hospital data
+        pring("Warning: Using fallback hospital data due to missing/invalid API key or fetch error.")
         hospitals = generate_fallback_hospitals()
 
     # Auto-generate seed when <= 0

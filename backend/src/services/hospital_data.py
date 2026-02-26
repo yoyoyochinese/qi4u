@@ -63,6 +63,7 @@ BUSAN_HOSPITAL_COORDS: dict[str, tuple[float, float]] = {
 # Default coordinates for hospitals not in the lookup (Busan city center)
 _DEFAULT_LAT = 35.1796
 _DEFAULT_LNG = 129.0756
+_TARGET_FALLBACK_HOSPITALS = 38
 
 
 def _find_coords(name: str) -> tuple[float, float]:
@@ -88,6 +89,7 @@ def _parse_xml_response(xml_text: str) -> list[Hospital]:
     items = root.findall(".//item")
     hospitals: list[Hospital] = []
 
+    seen_hospital_ids: set[str] = set()
     for item in items:
         hpid = item.findtext("hpid", "")
         name = item.findtext("dutyName", "Unknown")
@@ -128,9 +130,14 @@ def _parse_xml_response(xml_text: str) -> list[Hospital]:
         else:
             lat, lng = _find_coords(name)
 
+        hospital_id = hpid or f"hosp_{len(hospitals)}"
+        if hospital_id in seen_hospital_ids:
+            continue
+        seen_hospital_ids.add(hospital_id)
+
         hospitals.append(
             Hospital(
-                hospital_id=hpid or f"hosp_{len(hospitals)}",
+                hospital_id=hospital_id,
                 hospital_name=name,
                 lat=lat,
                 lng=lng,
@@ -203,6 +210,26 @@ def generate_fallback_hospitals() -> list[Hospital]:
                 current_occupancy=occ,
             )
         )
+
+    # Keep demo behavior stable when API is unavailable: always provide 38 hospitals.
+    base_count = len(hospitals)
+    while len(hospitals) < _TARGET_FALLBACK_HOSPITALS:
+        idx = len(hospitals)
+        lat = BUSAN_HOSPITAL_COORDS["부산대학교병원"][0] + rng.uniform(-0.09, 0.09)
+        lng = BUSAN_HOSPITAL_COORDS["부산대학교병원"][1] + rng.uniform(-0.12, 0.12)
+        max_cap = rng.randint(10, 34)
+        occ = rng.randint(int(max_cap * 0.60), int(max_cap * 0.92))
+        hospitals.append(
+            Hospital(
+                hospital_id=f"fallback_extra_{idx}",
+                hospital_name=f"부산 권역응급의료기관 추가-{idx - base_count + 1}",
+                lat=lat,
+                lng=lng,
+                max_capacity=max_cap,
+                current_occupancy=occ,
+            )
+        )
+
     return hospitals
 
 

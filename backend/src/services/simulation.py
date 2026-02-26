@@ -1,11 +1,10 @@
 """Simulation engine for baseline vs optimized ER allocation.
 
 Admission probability model:
-  P(accept) = (1 - ratio^3) * (0.6 + 0.4 * severity/5)
-  where ratio = current_occupancy / max_capacity
+  P(accept) = sigmoid(8.5 * (0.78 - ratio)) * severity_boost
+  where ratio = current_occupancy / max_capacity and severity_boost is mild.
 
-  Capacity pressure dominates: even severity-5 patients get refused
-  at high occupancy.
+  Capacity pressure dominates severity: near-full hospitals usually refuse.
 
 Time model:
   time_per_hop = BASE_TIME_MIN + DISTANCE_FACTOR * distance_km
@@ -20,6 +19,7 @@ re-anneals refused patients with updated occupancy each round.
 import random
 import uuid
 from collections.abc import Generator
+from math import exp
 
 from src.models.hospital import Hospital
 from src.models.patient import Patient
@@ -50,8 +50,10 @@ def _admission_probability(
     if max_capacity <= 0 or occupancy >= max_capacity:
         return 0.0
     ratio = occupancy / max_capacity
-    capacity_factor = 1.0 - ratio ** 3
-    severity_factor = 0.6 + 0.4 * (severity / 5.0)
+    # Logistic decay makes acceptance drop sharply beyond ~80% occupancy.
+    capacity_factor = 1.0 / (1.0 + exp(8.5 * (ratio - 0.78)))
+    # Severity matters, but less than capacity pressure.
+    severity_factor = 0.88 + 0.12 * (severity / 5.0)
     return max(0.0, min(1.0, capacity_factor * severity_factor))
 
 
@@ -219,14 +221,29 @@ def run_baseline_stream(
             cur_lat, cur_lng = target.lat, target.lng
             recent_refused.append(target.hospital_id)
 
-        # Safety: force-admit to least-full hospital if max hops exceeded
+        # Safety: force-admit to least-full hospital if max hops exceeded.
+        # Emit a final accepted hop so event logs and metrics stay consistent.
         if accepted_hospital is None:
             least_full = min(
                 hospitals,
                 key=lambda h: occupancy.get(h.hospital_id, 0) / max(h.max_capacity, 1),
             )
+            travel = _hop_time(cur_lat, cur_lng, least_full.lat, least_full.lng)
+            elapsed += travel
             occupancy[least_full.hospital_id] = occupancy.get(least_full.hospital_id, 0) + 1
             accepted_hospital = least_full
+            event = AttemptEvent(
+                patient_id=pat.patient_id,
+                hospital_id=least_full.hospital_id,
+                hospital_name=least_full.hospital_name,
+                hop_number=len(attempts) + 1,
+                accepted=True,
+                elapsed_time=round(elapsed, 2),
+                lat=least_full.lat,
+                lng=least_full.lng,
+            )
+            attempts.append(event)
+            yield event
 
         yield PatientResult(
             patient_id=pat.patient_id,
@@ -263,13 +280,20 @@ def run_optimized_stream(
     results: list[PatientResult] = []
 
     round_num = 0
-    max_rounds = 10
+    max_rounds = max(12, min(40, len(patients) // 2))
+    refused_pairs: set[tuple[int, str]] = set()
 
     while pending and round_num < max_rounds:
         round_num += 1
 
         # Run SA for this batch
-        assignment = solve_allocation(pending, hospitals, occupancy)
+        assignment = solve_allocation(
+            pending,
+            hospitals,
+            occupancy,
+            random_seed=seed + 2000 + round_num,
+            refused_pairs=refused_pairs,
+        )
 
         still_pending: list[Patient] = []
 
@@ -316,6 +340,7 @@ def run_optimized_stream(
                 yield results[-1]
             else:
                 st["lat"], st["lng"] = h.lat, h.lng
+                refused_pairs.add((pat.patient_id, h.hospital_id))
                 still_pending.append(pat)
 
         pending = still_pending
